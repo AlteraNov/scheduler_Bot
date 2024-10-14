@@ -1,115 +1,190 @@
-import logging
+import os
+import asyncio
+import aiosqlite
+from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.utils import executor
 from datetime import datetime, timedelta
-from dateutil.parser import parse
-from telegram import Update, ForceReply
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+import pytz
+from database import init_db, add_task, delete_task, delete_all_tasks, get_due_tasks
+from datetime import datetime
+# Настройки бота
+API_TOKEN = '8020507153:AAEKpXpo9lFxWyze5wfYJaTx-L2sllq99Rc'
+bot = Bot(token=API_TOKEN)
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)
 
-# Настройка логирования
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
+# States
+class Form(StatesGroup):
+    waiting_for_timezone = State()
+    waiting_for_task = State()
+    waiting_for_time = State()
+    waiting_for_task_id = State()
+    waiting_for_due_time = State()
 
-# Словарь для хранения задач пользователей
-user_tasks = {}
+async def init_db():
+    async with aiosqlite.connect('tasks.db') as db:
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                timezone TEXT
+            )
+        ''')
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                task TEXT NOT NULL,
+                due_time DATETIME NOT NULL,
+                completed BOOLEAN DEFAULT FALSE,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        await db.commit()
 
-# Команда /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Я твой бот для управления задачами. Введи /help для получения помощи.")
+@dp.message_handler(commands=['start',"help"])
+async def start_command(message: types.Message):
+    await message.reply("Привет! Я бот для планирования задач.\n \n"
+                        "/add для добавления задачи. \n \n"
+                        "/delete для удаления задачи. \n \n"
+                        "/deleteall для удаления всех задач.\n \n"
+                        "/list, чтобы показать список актуальных задач. \n \n"
+                        "Пожалуйста, укажите ваш часовой пояс (например, 'Europe/Moscow').")
+    await Form.waiting_for_timezone.set()
 
-# Команда /help
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = (
-        "/new_task <задача> - Создать новую задачу\n"
-        "/list_tasks - Список всех задач\n"
-        "/done <номер задачи> - Отметить задачу как выполненную\n"
-        "/delete <номер задачи> - Удалить задачу\n"
-    )
-    await update.message.reply_text(help_text)
-
-# Команда для создания задач
-async def new_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if user_id not in user_tasks:
-        user_tasks[user_id] = []
-
-    task_text = ' '.join(context.args)
-    if not task_text:
-        await update.message.reply_text("Пожалуйста, введите текст задачи.")
-        return
-
-    # Добавление задачи с текущим временем
-    task = {
-        'text': task_text,
-        'created_at': datetime.now(),
-        'completed': False
-    }
-    user_tasks[user_id].append(task)
-    await update.message.reply_text(f"Задача добавлена: {task_text}")
-# Команда для отображения списка задач
-async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    tasks = user_tasks.get(user_id, [])
-
-    if not tasks:
-        await update.message.reply_text("У вас нет задач.")
-        return
-
-    message = "Ваши задачи:\n"
-    for i, task in enumerate(tasks, start=1):
-        status = "✅" if task['done'] else "❌"
-        message += f"{i}. {status} {task['text']} (Добавлено: {task['timestamp'].strftime('%Y-%m-%d %H:%M')})\n"
-
-    await update.message.reply_text(message)
-
-# Команда для отображения задач
-async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    tasks = user_tasks.get(user_id, [])
-
-    if not tasks:
-        await update.message.reply_text("У вас нет активных задач.")
-        return
-
-    tasks_list = "\n".join([f"{i+1}. {task['text']} - {'Выполнена' if task['completed'] else 'Активна'}" for i, task in enumerate(tasks)])
-    await update.message.reply_text(f"Ваши задачи:\n{tasks_list}")
-
-# Команда для отметки задачи как выполненной
-async def done_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    task_index = int(context.args[0]) - 1
-    tasks = user_tasks.get(user_id, [])
-    
-    if 0 <= task_index < len(tasks):
-        tasks[task_index]['completed'] = True
-        await update.message.reply_text(f"Задача выполнена: {tasks[task_index]['text']}")
-        if len([t for t in tasks if t['completed']]) >= 5:
-            completed_tasks = [i for i, t in enumerate(tasks) if t['completed']]
-            for i in completed_tasks[:5]:
-                del tasks[i]  # Удаляем выполненные задачи если их больше 5
-    else:
-        await update.message.reply_text("Задача не найдена.")
-# Команда для удаления задачи
-async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
+@dp.message_handler(state=Form.waiting_for_timezone)
+async def process_timezone(message: types.Message, state: FSMContext):
+    timezone = message.text
     try:
-        task_index = int(context.args[0]) - 1
-        if user_id in user_tasks and 0 <= task_index < len(user_tasks[user_id]):
-            deleted_task = user_tasks[user_id].pop(task_index)
-            await update.message.reply_text(f"Задача удалена: {deleted_task['text']}")
-        else:
-            await update.message.reply_text("Задача не найдена.")
-    except (IndexError, ValueError):
-        await update.message.reply_text("Пожалуйста, укажите номер задачи правильно.")
-# Основная функция
-def main():
-    application = ApplicationBuilder().token('8020507153:AAEKpXpo9lFxWyze5wfYJaTx-L2sllq99Rc').build()
+        pytz.timezone(timezone)  # Проверка корректности часового пояса
+        async with aiosqlite.connect('tasks.db') as db:
+            await db.execute('INSERT OR IGNORE INTO users (username, timezone) VALUES (?, ?)', (message.from_user.username, timezone))
+            await db.commit()
+        await message.reply(f"Часовой пояс установлен на {timezone}. Теперь вы можете добавлять задачи. Введите вашу задачу.")
+        await Form.waiting_for_task.set()
+    except pytz.UnknownTimeZoneError:
+        await message.reply("Неверный часовой пояс. Попробуйте еще раз.")
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("new_task", new_task))
-    application.add_handler(CommandHandler("list_tasks", list_tasks))
-    application.add_handler(CommandHandler("done", done_task))
 
-    application.run_polling()
 
+@dp.message_handler(state=Form.waiting_for_task)
+async def process_task(message: types.Message, state: FSMContext):
+    task = message.text
+    user_id = message.from_user.id
+
+    await message.reply("Укажите время выполнения задачи в формате 'YYYY-MM-DD HH:MM'.")
+    await state.update_data(task=task)
+    await Form.waiting_for_due_time.set()
+
+@dp.message_handler(state=Form.waiting_for_due_time)
+async def process_due_time(message: types.Message, state: FSMContext):
+    due_time_str = message.text
+    data = await state.get_data()
+    task = data.get('task')
+    
+    try:
+        # Преобразование строки в объект datetime
+        due_time = datetime.strptime(due_time_str, '%Y-%m-%d %H:%M')
+        user_id = message.from_user.id
+        
+        async with aiosqlite.connect('tasks.db') as db:
+            await db.execute('INSERT INTO tasks (user_id, task, due_time) VALUES (?, ?, ?)', (user_id, task, due_time))
+            await db.commit()
+        
+        await message.reply(f"Задача '{task}' добавлена. Время выполнения: {due_time}.")
+        await state.finish()
+    except ValueError:
+        await message.reply("Неверный формат даты и времени. Попробуйте еще раз.")
+
+
+@dp.message_handler(commands=['add'])
+async def process_add_command(message: types.Message):
+    await Form.waiting_for_task.set()
+    await message.reply("Введите текст задачи:")
+async def get_user_timezone(username):
+    async with aiosqlite.connect('tasks.db') as db:
+        async with db.execute('SELECT timezone FROM users WHERE username = ?', (username,)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
+@dp.message_handler(commands=['list'])
+async def list_tasks(message: types.Message):
+    user_id = message.from_user.id
+    async with aiosqlite.connect('tasks.db') as db:
+        async with db.execute('SELECT task, due_time, completed FROM tasks WHERE user_id = ?', (user_id,)) as cursor:
+            tasks = await cursor.fetchall()
+    
+    if tasks:
+        response = "Ваши задачи:\n"
+        for task, due_time, completed in tasks:
+            status = "✅ Завершено" if completed else "❌ Не завершено"
+            response += f"- {task} (Срок: {due_time}) {status}\n"
+        await message.reply(response)
+    else:
+        await message.reply("У вас нет задач.")
+
+@dp.message_handler(commands=['complete'])
+async def complete_task(message: types.Message):
+    await message.reply("Введите ID задачи, которую вы хотите завершить.")
+    await Form.waiting_for_task_id.set()
+
+@dp.message_handler(state=Form.waiting_for_task_id)
+async def process_complete_task(message: types.Message, state: FSMContext):
+    task_id = message.text
+    user_id = message.from_user.id
+    
+    try:
+        task_id = int(task_id)
+        async with aiosqlite.connect('tasks.db') as db:
+            await db.execute('UPDATE tasks SET completed = TRUE WHERE id = ? AND user_id = ?', (task_id, user_id))
+            await db.commit()
+        
+        await message.reply(f"Задача #{task_id} отмечена как завершена.")
+        await state.finish()
+    except ValueError:
+        await message.reply("Пожалуйста, введите корректный ID задачи.")
+    except Exception as e:
+        await message.reply("Произошла ошибка. Проверьте, существует ли задача с указанным ID.")
+
+@dp.message_handler(state=Form.waiting_for_time)
+async def process_time(message: types.Message, state: FSMContext):
+    time_str = message.text
+    user_id = message.from_user.id
+    data = await state.get_data()
+    task = data.get('task')
+
+    try:
+        due_time = datetime.strptime(time_str, '%Y-%m-%d %H:%M')
+        await add_task(user_id, task, due_time.strftime('%Y-%m-%d %H:%M:%S'))
+        await message.reply("Задача добавлена!")
+    except ValueError:
+        await message.reply("Неверный формат времени. Пожалуйста, попробуйте снова.")
+
+    await state.finish()
+@dp.message_handler(commands=['delete'])
+async def process_delete_command(message: types.Message):
+    await message.reply("Введите ID задачи, которую хотите удалить:")
+    await Form.waiting_for_time.set()
+
+@dp.message_handler(state=Form.waiting_for_time)
+async def process_delete_task(message: types.Message, state: FSMContext):
+    try:
+        task_id = int(message.text)
+        await delete_task(task_id)
+        await message.reply("Задача удалена.")
+    except Exception as e:
+        await message.reply("Ошибка при удалении задачи. Возможно, такой задачи не существует.")
+
+    await state.finish()
+@dp.message_handler(commands=['deleteall'])
+async def process_delete_all_command(message: types.Message):
+    user_id = message.from_user.id
+    await delete_all_tasks(user_id)
+    await message.reply("Все задачи удалены.")
 if __name__ == '__main__':
-    main()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(init_db())
+    executor.start_polling(dp, skip_updates=True)
