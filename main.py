@@ -44,7 +44,16 @@ async def init_db():
             )
         ''')
         await db.commit()
+async def send_due_task_notifications():
+    async with aiosqlite.connect('tasks.db') as db:  # Open the connection once
+        while True:
+            current_time = datetime.now()
+            async with db.execute('SELECT user_id, id, task FROM tasks WHERE due_time <= ? AND completed = FALSE', (current_time,)) as cursor:
+                tasks = await cursor.fetchall()
 
+            for user_id, task_id, task in tasks:
+                await bot.send_message(user_id, f"🔔 Напоминание! Ваша задача: '{task}' должна быть выполнена.")
+            await asyncio.sleep(30)  # Check every minute
 @dp.message_handler(commands=['start',"help"])
 async def start_command(message: types.Message):
     await message.reply("Привет! Я бот для планирования задач.\n \n"
@@ -107,7 +116,7 @@ async def list_tasks(message: types.Message):
         async with db.execute('SELECT id, task, due_time, completed FROM tasks WHERE user_id = ?', (user_id,)) as cursor:
             tasks = await cursor.fetchall() 
     if tasks:
-        response = "Ваши задачи, для завершения /complete, для удаления задачи по итдексу /delete, для удаления всех задач /deleteall:\n"
+        response = "Ваши задачи:\n"
         for task_id, task, due_time, completed in tasks:
             status = "✅ Завершено" if completed else "❌ Не завершено"
             response += f"{task_id}. - {task} (Срок: {due_time}) {status}\n"
@@ -175,4 +184,5 @@ async def process_delete_all_command(message: types.Message):
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()
     loop.run_until_complete(init_db())
+    loop.create_task(send_due_task_notifications())
     executor.start_polling(dp, skip_updates=True)
