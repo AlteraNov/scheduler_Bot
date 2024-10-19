@@ -1,57 +1,22 @@
-import os
 import asyncio
 import aiosqlite
-from aiogram import Bot, Dispatcher, types
-from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram import types
 from aiogram.dispatcher import FSMContext
-from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.utils import executor
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 from database import init_db, add_task, delete_task, delete_all_tasks, get_due_tasks, get_completed_tasks, get_active_tasks
 from datetime import datetime
-# Настройки бота
-API_TOKEN = '8020507153:AAEKpXpo9lFxWyze5wfYJaTx-L2sllq99Rc'
-bot = Bot(token=API_TOKEN)
-storage = MemoryStorage() # Создаем хранилище для состояний
-dp = Dispatcher(bot, storage=storage) # Создаем диспетчер для обработки сообщений
-# Определяем состояния для обработки различных этапов взаимодействия
-class Form(StatesGroup):
-    waiting_for_timezone = State() 
-    waiting_for_task = State() 
-    waiting_for_time = State() 
-    waiting_for_task_id = State()
-    waiting_for_due_time = State() 
-    waiting_for_time_del =  State()
+from keyboards import create_keyboard
+from bot import dp
+from states import Form
+from notifications import send_due_task_notifications
 
-# Асинхронная функция для отправки уведомлений о задачах
-async def send_due_task_notifications():
-    async with aiosqlite.connect('tasks.db') as db:  
-        while True: # Бесконечный цикл для периодической проверки задач
-            current_time = datetime.now()
-            # Выбираем задачи, которые необходимо выполнить
-            async with db.execute('SELECT user_id, id, task FROM tasks WHERE due_time <= ? AND completed = FALSE', (current_time,)) as cursor:
-                tasks = await cursor.fetchall()
+async def on_startup():
+    await init_db() 
+    asyncio.create_task(send_due_task_notifications())
 
-            # Отправляем уведомления пользователям о задачах
-            for user_id, task_id, task in tasks:
-                await bot.send_message(user_id, f"🔔 Напоминание! Ваша задача: '{task}' должна быть выполнена.")
-            await asyncio.sleep(30) 
-
-# Создаем клавиатуру с кнопками
-keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
-button_add = KeyboardButton('/add')
-button_delete = KeyboardButton('/delete')
-button_complete = KeyboardButton('/complete')
-button_deleteall = KeyboardButton('/deleteall')
-button_list = KeyboardButton('/list')
-button_active = KeyboardButton('/active')
-button_completed = KeyboardButton('/completed')
-button_other = KeyboardButton('another')
-
-# Добавляем кнопки на клавиатуру
-keyboard.add(button_add, button_delete, button_complete, button_deleteall, button_list, button_active, button_completed, button_other)
+keyboard = create_keyboard()
 
 # Обработчик команды /start и /help
 @dp.message_handler(commands=['start',"help"])
@@ -59,7 +24,7 @@ async def start_command(message: types.Message):
     await message.reply("Привет! Доброе начало дня? Со мной теперь будет каждый день доброе))\n \n"
                         "Я твой личный помощник по составлению планов. Как ты уже понял, меня зовут Марвин.\n"
                         "И мой мозг запрограммирован на отслеживание задач. Уж моя современная консервнная банка ничего не забудет ;) \n \n"
-                        "Так еще и тебе напомнит) \n"
+                        "Так еще и тебе напомнит) \n \n"
                         "Кратенько о моих способностях: \n"
                         "/add для добавления задачи. \n \n"
                         "/delete для удаления задачи. \n \n"
@@ -82,10 +47,10 @@ async def process_timezone(message: types.Message, state: FSMContext):
             # Вставляем пользователя в таблицу, если его еще нет
             await db.execute('INSERT OR IGNORE INTO users (username, timezone) VALUES (?, ?)', (message.from_user.username, timezone))
             await db.commit()
-        await message.reply(f"Точно правильно ввел?))00)0 Часовой пояс установлен на {timezone}. Теперь введите вашу задачу.")
+        await message.reply(f"Точно правильно ввел?) Часовой пояс установлен на {timezone}. Теперь введите вашу задачу.")
         await Form.waiting_for_task.set()  # Переходим к следующему состоянию - ожиданию задачи
     except pytz.UnknownTimeZoneError:
-        await message.reply("Не-не, что-то не то. Попробуйте еще раз.Доступные часовые пояса России: \n"
+        await message.reply("Не-не, что-то не то. Попробуй еще раз. Доступные часовые пояса России: \n"
                             "Europe/Moscow, Europe/Samara, Asia/Yekaterinburg, Asia/Omsk, \n" 
                             "Asia/Krasnoyarsk, Asia/Irkutsk, Asia/Vladivostok, Asia/Magadan, Asia/Kamchatka, Asia/Sakhalin.\n")
         
@@ -116,7 +81,7 @@ async def process_due_time(message: types.Message, state: FSMContext):
         await message.reply(f"Задача '{task}' добавлена. Время выполнения: {due_time}.")
         await state.finish()
     except ValueError:
-        await message.reply("Неверный формат даты и времени. Попробуйте еще раз.")
+        await message.reply("Неверный формат даты и времени. Попробуй еще раз.")
 
 # Обработчик команды /add
 @dp.message_handler(commands=['add'])
@@ -164,7 +129,7 @@ async def process_complete_task(message: types.Message, state: FSMContext):
             await message.reply(f"Задача #{task_id} отмечена как завершена.")
         await state.finish()
     except ValueError:
-        await message.reply("Пожалуйста, введите корректный ID задачи.")
+        await message.reply("Пожалуйста, введи корректный ID задачи.")
 
 # Обработчик сообщений, когда бот ожидает ввод времени
 @dp.message_handler(state=Form.waiting_for_time)
@@ -178,7 +143,7 @@ async def process_time(message: types.Message, state: FSMContext):
         await add_task(user_id, task, due_time.strftime('%Y-%m-%d %H:%M:%S'))
         await message.reply("Задача добавлена!")
     except ValueError:
-        await message.reply("Неверный формат времени. Пожалуйста, попробуйте снова.")
+        await message.reply("Неверный формат времени. Пожалуйста, попробуй снова.")
 
     await state.finish()
 
