@@ -21,6 +21,7 @@ keyboard = create_keyboard()
 # Обработчик команды /start и /help
 @dp.message_handler(commands=['start',"help"])
 async def start_command(message: types.Message):
+    await message.answer_sticker("CAACAgIAAxkBAAENAVFnGM5oxGJ-flYBger83tqZtA5dsQACplIAAs46uUhYEAqImS438TYE")
     await message.reply("Привет! Доброе начало дня? Со мной теперь будет каждый день доброе))\n \n"
                         "Я твой личный помощник по составлению планов. Как ты уже понял, меня зовут Марвин.\n"
                         "И мой мозг запрограммирован на отслеживание задач. Уж моя современная консервнная банка ничего не забудет ;) \n \n"
@@ -47,9 +48,10 @@ async def process_timezone(message: types.Message, state: FSMContext):
             # Вставляем пользователя в таблицу, если его еще нет
             await db.execute('INSERT OR IGNORE INTO users (username, timezone) VALUES (?, ?)', (message.from_user.username, timezone))
             await db.commit()
-        await message.reply(f"Точно правильно ввел?) Часовой пояс установлен на {timezone}. Теперь введите вашу задачу.")
+        await message.reply(f"Точно правильно ввел?) Часовой пояс установлен на {timezone}. Теперь введи задачу.")
         await Form.waiting_for_task.set()  # Переходим к следующему состоянию - ожиданию задачи
     except pytz.UnknownTimeZoneError:
+        await message.answer_sticker("CAACAgIAAxkBAAENAVdnGM7QQ_HVZRb7danpVnEKSH3ywQACA1IAAkTquEhIV93zfmUm_jYE")
         await message.reply("Не-не, что-то не то. Попробуй еще раз. Доступные часовые пояса России: \n"
                             "Europe/Moscow, Europe/Samara, Asia/Yekaterinburg, Asia/Omsk, \n" 
                             "Asia/Krasnoyarsk, Asia/Irkutsk, Asia/Vladivostok, Asia/Magadan, Asia/Kamchatka, Asia/Sakhalin.\n")
@@ -59,7 +61,7 @@ async def process_timezone(message: types.Message, state: FSMContext):
 async def process_task(message: types.Message, state: FSMContext):
     task = message.text
     await message.reply("Воо, обожаю такое! Когда напомнить? \n \n"
-                        "Укажите время выполнения задачи в формате 'YYYY-MM-DD HH:MM'.\n \n")
+                        "Укажи время выполнения задачи в формате 'YYYY-MM-DD HH:MM'.\n \n")
     await state.update_data(task=task)
     await Form.waiting_for_due_time.set() # Переходим к следующему состоянию - ожиданию времени выполнения
 
@@ -81,6 +83,7 @@ async def process_due_time(message: types.Message, state: FSMContext):
         await message.reply(f"Задача '{task}' добавлена. Время выполнения: {due_time}.")
         await state.finish()
     except ValueError:
+        await message.answer_sticker("CAACAgIAAxkBAAENAVdnGM7QQ_HVZRb7danpVnEKSH3ywQACA1IAAkTquEhIV93zfmUm_jYE")
         await message.reply("Неверный формат даты и времени. Попробуй еще раз.")
 
 # Обработчик команды /add
@@ -92,24 +95,26 @@ async def process_add_command(message: types.Message):
 # Обработчик команды /list для отображения всех задач
 @dp.message_handler(commands=['list'])
 async def list_tasks(message: types.Message):
+    await message.answer_sticker("CAACAgIAAxkBAAENAVVnGM7PJhtHVQTIY8BXWnUP8-Q3_wACNlIAAnnnuUjvn_B2ILWCmTYE")
     user_id = message.from_user.id
     async with aiosqlite.connect('tasks.db') as db: # Открываем соединение с базой данных
         async with db.execute('SELECT id, task, due_time, completed FROM tasks WHERE user_id = ?', (user_id,)) as cursor:
             tasks = await cursor.fetchall()
     if tasks:
-        response = "Ваши задачи:\n"
+        response = "Твои задачи:\n"
         for task_id, task, due_time, completed in tasks:
             status = "✅ Завершено" if completed else "❌ Не завершено"
             due_time_formatted = datetime.strptime(due_time, '%Y-%m-%d %H:%M:%S').strftime('%d-%m-%Y %H:%M')
             response += f"{task_id}. - {task} (Срок: {due_time_formatted}) {status}\n"
         await message.reply(response)
     else:
-        await message.reply("У вас нет задач.")
+        await message.reply("У тебя нет задач.")
 
 # Обработчик команды /complete для завершения задачи
 @dp.message_handler(commands=['complete'])
 async def complete_task(message: types.Message):
-    await message.reply("Введите ID задачи, которую вы хотите завершить.")
+    await message.answer_sticker("CAACAgIAAxkBAAENAVNnGM7JkWyIRxv3d0VraXPhZ8q-6AACMlwAAs1JwUiMHhi4mKDfuTYE")
+    await message.reply("Введи ID задачи, которую хочешь завершить.")
     await Form.waiting_for_task_id.set() # Устанавливаем состояние ожидания ID задачи
 
 # Обработчик состояния ожидания ID задачи для завершения
@@ -129,6 +134,7 @@ async def process_complete_task(message: types.Message, state: FSMContext):
             await message.reply(f"Задача #{task_id} отмечена как завершена.")
         await state.finish()
     except ValueError:
+        await message.answer_sticker("CAACAgIAAxkBAAENAVdnGM7QQ_HVZRb7danpVnEKSH3ywQACA1IAAkTquEhIV93zfmUm_jYE")
         await message.reply("Пожалуйста, введи корректный ID задачи.")
 
 # Обработчик сообщений, когда бот ожидает ввод времени
@@ -143,6 +149,7 @@ async def process_time(message: types.Message, state: FSMContext):
         await add_task(user_id, task, due_time.strftime('%Y-%m-%d %H:%M:%S'))
         await message.reply("Задача добавлена!")
     except ValueError:
+        await message.answer_sticker("CAACAgIAAxkBAAENAVdnGM7QQ_HVZRb7danpVnEKSH3ywQACA1IAAkTquEhIV93zfmUm_jYE")
         await message.reply("Неверный формат времени. Пожалуйста, попробуй снова.")
 
     await state.finish()
@@ -150,7 +157,7 @@ async def process_time(message: types.Message, state: FSMContext):
 # Обработчик команды /delete для удаления задачи
 @dp.message_handler(commands=['delete'])
 async def process_delete_command(message: types.Message):
-    await message.reply("Теперь нам уже не нужно. Введите ID задачи, которую хотите удалить:")
+    await message.reply("Теперь нам уже не нужно. Введи ID задачи, которую хочешь удалить:")
     await Form.waiting_for_time_del.set()
 
 # Обработчик состояния ожидания ID задачи для удаления
@@ -161,6 +168,7 @@ async def process_delete_task(message: types.Message, state: FSMContext):
         await delete_task(task_id)
         await message.reply("Кыш-кыш, мы уже на другом уровне осуществления целей ;)")
     except Exception as e:
+        await message.answer_sticker("CAACAgIAAxkBAAENAVdnGM7QQ_HVZRb7danpVnEKSH3ywQACA1IAAkTquEhIV93zfmUm_jYE")
         await message.reply("Ошибка при удалении задачи. Возможно, такой задачи не существует.")
 
     await state.finish()
@@ -175,6 +183,7 @@ async def process_delete_all_command(message: types.Message):
 # Обработчик команды /active для отображения активных задач
 @dp.message_handler(commands=['active'])
 async def list_active_tasks(message: types.Message):
+    await message.answer_sticker("CAACAgIAAxkBAAENAVVnGM7PJhtHVQTIY8BXWnUP8-Q3_wACNlIAAnnnuUjvn_B2ILWCmTYE")
     user_id = message.from_user.id
     active_tasks = await get_active_tasks(user_id) # Извлекаем активные задачи для пользователя
     if active_tasks:
@@ -183,22 +192,23 @@ async def list_active_tasks(message: types.Message):
             response += f"{task_id}. - {task} (Срок: {due_time})\n" # Формируем строку для каждой задачи
         await message.reply(response)
     else:
-        await message.reply("У вас нет активных задач.")
+        await message.reply("У тебя нет активных задач.")
 
 # Обработчик команды /completed для отображения завершенных задач
 @dp.message_handler(commands=['completed'])
 async def list_completed_tasks(message: types.Message):
+    await message.answer_sticker("CAACAgIAAxkBAAENAVVnGM7PJhtHVQTIY8BXWnUP8-Q3_wACNlIAAnnnuUjvn_B2ILWCmTYE")
     user_id = message.from_user.id
     completed_tasks = await get_completed_tasks(user_id)   # Извлекаем завершенные задачи для пользователя
     completed_tasks = completed_tasks[:10]   # Ограничиваем вывод до 10 завершенных задач
     if completed_tasks:
-        response = "Ваши первые 10 завершенных задач:\n"
+        response = "Твои первые 10 завершенных задач:\n"
         for task_id, task, due_time, completed_at in completed_tasks:
             due_time_formatted = datetime.strptime(due_time, '%Y-%m-%d %H:%M:%S').strftime('%d-%m-%Y %H:%M')
             response += f"{task_id}. - {task} (Срок: {due_time_formatted}) (Завершено: {completed_at})\n"
         await message.reply(response)
     else:
-        await message.reply("У вас нет завершенных задач.")
+        await message.reply("У тебя нет завершенных задач.")
 
 # Обработчик для кнопки "Другое"
 @dp.message_handler(lambda message: message.text == 'another')
